@@ -14,7 +14,7 @@ matched/missing keywords, formatting warnings, and improvement suggestions.
 | 3 | Extraction: LLM structured extraction, skill normalization | Done |
 | 4 | Scoring engine | Done |
 | 5 | Report, suggestions, `/scans` API with SSE | Done |
-| 6 | Frontend | — |
+| 6 | Frontend | Done |
 | 7 | Evaluation | — |
 | 8 | Auth, polish, deploy | — |
 
@@ -133,6 +133,31 @@ show, and examples may only rephrase facts already in the resume.
 > PyMuPDF is AGPL-3.0 licensed. That's fine for an open-source/portfolio project; a closed-source
 > commercial deployment would need a commercial license or a switch to pypdf/pdfplumber.
 
+## Run the frontend
+
+Requires Node 20+. With the backend running on port 8000:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. The dev server forwards `/api` to the backend, so no CORS setup is
+needed.
+
+- **Upload page:** drop a resume (PDF/DOCX/TXT), then paste or upload the job description.
+  Everything is validated before upload.
+- **Live progress:** the scan page follows the server's event stream through each stage (and
+  falls back to polling if the stream is blocked).
+- **Report:** score gauge and band, AI suggestions with example rewrites, experience vs
+  responsibilities with the best matching resume line, a weighted score breakdown, matched and
+  missing skills (missing first), ATS formatting issues, and the extracted details to verify.
+- **Recent scans** are remembered in this browser only, since there are no accounts yet, and
+  can be deleted along with their files.
+- API types are generated from the backend's OpenAPI schema (`npm run gen:api`), so frontend
+  and backend can't drift apart.
+
 ## Run with Docker
 
 ```bash
@@ -148,6 +173,13 @@ and the API on port 8000. Stop any local `mongod` first; both use port 27017.
 cd backend
 uv run pytest
 uv run ruff check app tests && uv run ruff format --check app tests
+```
+
+```bash
+cd frontend
+npm test
+npm run lint
+npm run build
 ```
 
 ## Backend layout
