@@ -13,7 +13,7 @@ matched/missing keywords, formatting warnings, and improvement suggestions.
 | 2 | Parsing: resume/JD parsing, sections, ATS format checks | Done |
 | 3 | Extraction: LLM structured extraction, skill normalization | Done |
 | 4 | Scoring engine | Done |
-| 5 | Report, suggestions, `/scans` API with SSE | — |
+| 5 | Report, suggestions, `/scans` API with SSE | Done |
 | 6 | Frontend | — |
 | 7 | Evaluation | — |
 | 8 | Auth, polish, deploy | — |
@@ -30,17 +30,39 @@ uv run uvicorn app.main:app --reload
 ```
 
 - API docs: http://localhost:8000/docs
-- Liveness: `GET /api/health`
-- Readiness (checks MongoDB): `GET /api/health/ready`
-- Parse a resume: `POST /api/parse/resume` (multipart `file`: PDF, DOCX or TXT)
-- Parse a job description: `POST /api/parse/job-description` (form `text` **or** multipart `file`)
-- Extract a resume profile (LLM): `POST /api/extract/resume`
-- Extract job requirements (LLM): `POST /api/extract/job-description`
-- **Score a resume against a JD:** `POST /api/score` (multipart `resume` + `jd_text` or `jd_file`)
+- Liveness: `GET /api/health` · Readiness (checks MongoDB): `GET /api/health/ready`
 
-The extract endpoints need an Anthropic API key: set `ANTHROPIC_API_KEY` in `backend/.env`.
+### Scans API (what the app uses)
 
-Try them from the interactive docs at `/docs` with your own resume.
+| Endpoint | What it does |
+|---|---|
+| `POST /api/scans` | Upload `resume` + `jd_text` (or `jd_file`). Returns `202` at once with `events_url` and `result_url` |
+| `GET /api/scans/{id}/events` | Server-Sent Events: a `progress` event per stage (parsing → extracting → scoring → suggesting), then `done` |
+| `GET /api/scans/{id}` | Status, and once finished the full report: ATS score with breakdown, suggestions, format report, extracted profile and requirements, timings |
+| `DELETE /api/scans/{id}` | Deletes the scan and its uploaded files |
+
+```bash
+curl -F "resume=@resume.pdf" -F "jd_text=<paste the job description>" localhost:8000/api/scans
+curl -N localhost:8000/api/scans/<id>/events
+curl localhost:8000/api/scans/<id>
+```
+
+- Scans run in the background, at most `MAX_CONCURRENT_SCANS` at a time. New scans are limited
+  to `SCANS_PER_HOUR_PER_IP` per client, because each one costs LLM calls and there are no
+  accounts yet.
+- Scan ids are random 128-bit values: until accounts exist (Phase 8), the id is what grants
+  access to a scan.
+- Status `partial` means the score is ready but the suggestion step failed; `failed` carries
+  an `error_code` (`llm_unavailable`, `document_parse_error`, ...).
+- Scans interrupted by a restart are marked failed at startup.
+
+### Debug endpoints (step by step)
+
+`POST /api/parse/resume`, `/api/parse/job-description`, `/api/extract/resume`,
+`/api/extract/job-description` and `/api/score` expose each pipeline stage on its own. They are
+enabled except in production (`DEBUG_ENDPOINTS` overrides).
+
+LLM steps need an Anthropic API key: set `ANTHROPIC_API_KEY` in `backend/.env`.
 
 ## How resume parsing works
 
@@ -101,6 +123,13 @@ uv run python -m app.pipeline.scoring.download
 Embeddings implement LangChain's `Embeddings` interface, so any LangChain provider can replace
 the local model.
 
+## Suggestions
+
+After scoring, Claude turns the findings (missing skills, weakly covered responsibilities,
+format issues) and the redacted resume into at most 8 prioritized suggestions, each with an
+optional rewritten line. The prompt forbids suggesting skills or experience the resume doesn't
+show, and examples may only rephrase facts already in the resume.
+
 > PyMuPDF is AGPL-3.0 licensed. That's fine for an open-source/portfolio project; a closed-source
 > commercial deployment would need a commercial license or a switch to pypdf/pdfplumber.
 
@@ -129,10 +158,11 @@ backend/app/
 ├── core/          # config, db, logging, errors, middleware
 ├── models/        # Beanie documents: Scan, User, SkillSynonym
 ├── schemas/       # request/response models
-├── repositories/  # MongoDB access (Phase 2+)
-├── services/      # file storage, upload reading; scan orchestration later
+├── services/      # pipeline orchestration, scans + background runner, storage, uploads
 └── pipeline/      # parse → sections → contact → format check
+    ├── llm.py       # one structured Claude call + error mapping, shared by the LLM steps
     ├── extraction/  # redact → LLM extraction → skill normalization → experience maths
+    ├── suggestions/ # LLM improvement suggestions from the score breakdown
     └── scoring/     # keyword, semantic (embeddings + reranker), experience, title,
                      # education, format → weighted ATS score
 ```
