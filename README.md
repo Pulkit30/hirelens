@@ -12,7 +12,7 @@ matched/missing keywords, formatting warnings, and improvement suggestions.
 | 1 | Foundation: FastAPI skeleton, config, logging, MongoDB models, health checks | Done |
 | 2 | Parsing: resume/JD parsing, sections, ATS format checks | Done |
 | 3 | Extraction: LLM structured extraction, skill normalization | Done |
-| 4 | Scoring engine | — |
+| 4 | Scoring engine | Done |
 | 5 | Report, suggestions, `/scans` API with SSE | — |
 | 6 | Frontend | — |
 | 7 | Evaluation | — |
@@ -36,6 +36,7 @@ uv run uvicorn app.main:app --reload
 - Parse a job description: `POST /api/parse/job-description` (form `text` **or** multipart `file`)
 - Extract a resume profile (LLM): `POST /api/extract/resume`
 - Extract job requirements (LLM): `POST /api/extract/job-description`
+- **Score a resume against a JD:** `POST /api/score` (multipart `resume` + `jd_text` or `jd_file`)
 
 The extract endpoints need an Anthropic API key: set `ANTHROPIC_API_KEY` in `backend/.env`.
 
@@ -74,6 +75,32 @@ Try them from the interactive docs at `/docs` with your own resume.
    table can be edited. Unknown skills are kept as written and listed separately.
    JD alternatives ("FastAPI or Django") become one requirement that either skill satisfies.
 
+## How the ATS score works
+
+| Component | Weight | How |
+|---|---|---|
+| Keywords | 35% | Must-have (85%) and nice-to-have (15%) skill coverage. "X or Y" requirements are met by either. A skill the LLM missed still counts if it is written in the resume text. |
+| Semantic | 25% | Each JD responsibility is matched to the closest resume lines with local embeddings (`bge-base-en-v1.5`), then reranked by a cross-encoder (`jina-reranker-v1-tiny`). The best line is kept as evidence. |
+| Experience | 15% | Years from role dates (internships count half) vs the JD minimum. |
+| Title | 10% | Embedding similarity of job titles with seniority words removed. |
+| Education | 5% | Degree level vs requirement; a mismatched field costs 25%. |
+| Format | 10% | The ATS format score from parsing. |
+
+Components that don't apply (e.g. the JD states no minimum years) are dropped and their weight
+is redistributed. Bands: **strong** ≥ 75, **good** ≥ 50, otherwise **weak**. All weights and
+calibration ranges live in `app/pipeline/scoring/config.py`, measured on real model outputs,
+and every score records its `scoring_version`.
+
+The scoring models run locally on CPU (ONNX via fastembed, ~340 MB). They download into
+`backend/.models` on first start, or ahead of time with:
+
+```bash
+uv run python -m app.pipeline.scoring.download
+```
+
+Embeddings implement LangChain's `Embeddings` interface, so any LangChain provider can replace
+the local model.
+
 > PyMuPDF is AGPL-3.0 licensed. That's fine for an open-source/portfolio project; a closed-source
 > commercial deployment would need a commercial license or a switch to pypdf/pdfplumber.
 
@@ -105,5 +132,7 @@ backend/app/
 ├── repositories/  # MongoDB access (Phase 2+)
 ├── services/      # file storage, upload reading; scan orchestration later
 └── pipeline/      # parse → sections → contact → format check
-    └── extraction/  # redact → LLM extraction → skill normalization → experience maths
+    ├── extraction/  # redact → LLM extraction → skill normalization → experience maths
+    └── scoring/     # keyword, semantic (embeddings + reranker), experience, title,
+                     # education, format → weighted ATS score
 ```

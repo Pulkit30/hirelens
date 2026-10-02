@@ -23,6 +23,7 @@ services:
       - "8000:8000"
     volumes:
       - uploads:/app/storage
+      - models:/app/.models # scoring models, downloaded once (~340 MB)
     depends_on:
       mongo:
         condition: service_healthy
@@ -31,3 +32,4 @@ volumes:
   mongo_data:
   mongo_config:
   uploads:
+  models:
